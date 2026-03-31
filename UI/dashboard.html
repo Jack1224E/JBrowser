@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Meadow — Pir Browser</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Layered Background -->
+    <div class="ghibli-background"></div>
+    <div class="ghibli-cloud" style="width: 400px; height: 150px; top: 10%; left: 5%;"></div>
+    <div class="ghibli-cloud" style="width: 500px; height: 200px; top: 5%; right: 10%;"></div>
+    <div class="ghibli-cloud" style="width: 250px; height: 100px; top: 25%; left: 40%;"></div>
+    <div class="grain-overlay"></div>
+    <div class="meadow-floor" id="wildflower-zone"></div>
+
+    <main>
+        <!-- Search Bar — The Focal Point -->
+        <div class="search-container">
+            <div class="search-wrapper">
+                <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path>
+                </svg>
+                <input type="text" id="main-search" placeholder="Explore the horizons..." autocomplete="off">
+            </div>
+            <ul id="suggestions" class="suggestions-list"></ul>
+        </div>
+
+        <!-- Category Drawers — Pirate's Manifest (Hardcoded) -->
+        <div id="armory-drawer" class="category-drawer">
+            <h3 class="drawer-title">⚔️ ARMORY</h3>
+            <div class="drawer-grid">
+                <a href="https://fitgirl-repacks.site/" class="drawer-link">FitGirl Repacks</a>
+                <a href="https://dodi-repacks.site/" class="drawer-link">DODI Repacks</a>
+                <a href="https://steamrip.com/" class="drawer-link">SteamRIP</a>
+                <a href="https://www.skidrowcodex.net/" class="drawer-link">Skidrow Codex</a>
+                <a href="https://steamunlocked.org/" class="drawer-link">SteamUnlocked</a>
+                <a href="https://www.elamigosgamez.net/" class="drawer-link">ElAmigos</a>
+            </div>
+        </div>
+
+        <div id="mirror-drawer" class="category-drawer">
+            <h3 class="drawer-title">🪞 THE MIRROR</h3>
+            <div class="drawer-grid">
+                <a href="https://youtube.com/" class="drawer-link">YouTube</a>
+                <a href="https://cobalt.tools/" class="drawer-link">Cobalt (Downloader)</a>
+                <a href="https://felo.ai/" class="drawer-link">Felo AI</a>
+                <a href="https://123movies.net/" class="drawer-link">123Movies</a>
+            </div>
+        </div>
+
+        <div id="stations-drawer" class="category-drawer">
+            <h3 class="drawer-title">🎵 STATIONS</h3>
+            <div class="drawer-grid">
+                <a href="https://open.spotify.com/" class="drawer-link">Spotify</a>
+                <a href="https://spotiload.com/" class="drawer-link">Spotiload</a>
+                <a href="https://doubledouble.top/" class="drawer-link">Double-Double</a>
+                <a href="https://lucida.to/" class="drawer-link">Lucida (Lossless)</a>
+            </div>
+        </div>
+
+        <div id="depths-drawer" class="category-drawer">
+            <h3 class="drawer-title">🌊 THE DEPTHS</h3>
+            <div class="drawer-grid">
+                <a href="https://jio.hashhackers.com/" class="drawer-link">1337x</a>
+                <a href="https://rutracker.org/" class="drawer-link">RuTracker</a>
+                <a href="https://wiki.cachyos.org/" class="drawer-link">CachyOS Wiki</a>
+                <a href="https://massgrave.dev/" class="drawer-link">Massgrave</a>
+            </div>
+        </div>
+
+        <!-- Switchboard Quick Guide -->
+        <div id="guide-drawer" class="category-drawer">
+            <h3 class="drawer-title">⚓ READY TO SAIL</h3>
+            <div class="guide-content">
+                <p class="guide-intro">Your <b>Switchboard</b> is already pre-configured in the toolbar:</p>
+                <div class="legend-grid">
+                    <div class="legend-item"><span class="dot" style="background:#76a15d"></span> <b>Auto-Switch</b>: Pirate sites use the hook; others stay Direct.</div>
+                    <div class="legend-item"><span class="dot" style="background:#4d90f0"></span> <b>Bandwidth Hook</b>: Direct local high-speed tunnel.</div>
+                    <div class="legend-item"><span class="dot" style="background:#6f42c1"></span> <b>Vanguard</b>: Pre-set for Tor (127.0.0.1:9050).</div>
+                    <div class="legend-item"><span class="dot" style="background:#f0ad4e"></span> <b>Great Sea</b>: Pre-set for Bridge/HTTP.</div>
+                    <div class="legend-item"><span class="dot" style="background:#343a40"></span> <b>Ghost</b>: Manual SOCKS5 entry.</div>
+                </div>
+                <p class="guide-tip"><b>Zero-Setup</b>: No import required. Just click the circle and choose your path.</p>
+            </div>
+        </div>
+
+        <!-- Category Navigation Buttons -->
+        <nav class="footer-nav">
+            <button class="category-button" data-drawer="armory-drawer">ARMORY</button>
+            <button class="category-button" data-drawer="mirror-drawer">THE MIRROR</button>
+            <button class="category-button" data-drawer="stations-drawer">STATIONS</button>
+            <button class="category-button" data-drawer="depths-drawer">THE DEPTHS</button>
+            <button class="category-button help-btn" data-drawer="guide-drawer">?</button>
+        </nav>
+    </main>
+
+    <script>
+        // --- Search Engine ---
+        const searchInput = document.getElementById('main-search');
+        const suggestionsList = document.getElementById('suggestions');
+
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value;
+            if (query.length < 2) { suggestionsList.style.display = 'none'; return; }
+
+            const script = document.createElement('script');
+            window.handleSuggestions = (data) => {
+                const suggestions = data[1];
+                suggestionsList.innerHTML = '';
+                if (suggestions && suggestions.length > 0) {
+                    suggestions.slice(0, 6).forEach(s => {
+                        const li = document.createElement('li');
+                        li.textContent = s;
+                        li.addEventListener('click', () => { searchInput.value = s; performSearch(s); });
+                        suggestionsList.appendChild(li);
+                    });
+                    suggestionsList.style.display = 'block';
+                } else { suggestionsList.style.display = 'none'; }
+                if (script.parentNode) script.parentNode.removeChild(script);
+            };
+            script.src = `https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(query)}&callback=handleSuggestions`;
+            document.body.appendChild(script);
+        });
+
+        const performSearch = (q) => { if (q.trim()) window.location.href = `https://www.google.com/search?q=${encodeURIComponent(q)}`; };
+        searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') performSearch(searchInput.value); });
+
+        // --- Drawer Mechanic (Event Delegation) ---
+        document.querySelectorAll('.category-button').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const drawerId = btn.dataset.drawer;
+                const target = document.getElementById(drawerId);
+                const wasActive = target.classList.contains('active');
+
+                // Close everything
+                document.querySelectorAll('.category-drawer').forEach(d => d.classList.remove('active'));
+                document.querySelectorAll('.category-button').forEach(b => b.classList.remove('active'));
+
+                if (!wasActive) {
+                    target.classList.add('active');
+                    btn.classList.add('active');
+                }
+            });
+        });
+
+        // Prevent drawer clicks from closing the drawer
+        document.querySelectorAll('.category-drawer').forEach(d => {
+            d.addEventListener('click', (e) => e.stopPropagation());
+        });
+
+        // Close everything on outside click
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.category-drawer').forEach(d => d.classList.remove('active'));
+            document.querySelectorAll('.category-button').forEach(b => b.classList.remove('active'));
+            suggestionsList.style.display = 'none';
+        });
+
+        // --- Wildflower Generator ---
+        (() => {
+            const zone = document.getElementById('wildflower-zone');
+            const colors = ['#f87171', '#fbbf24', '#60a5fa', '#f472b6', '#a78bfa', '#fb923c'];
+            for (let i = 0; i < 80; i++) {
+                const f = document.createElement('div');
+                f.className = 'wildflower';
+                f.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                f.style.left = `${Math.random() * 100}%`;
+                f.style.bottom = `${Math.random() * 35}%`;
+                const size = Math.random() * 5 + 3;
+                f.style.width = `${size}px`;
+                f.style.height = `${size}px`;
+                zone.appendChild(f);
+            }
+        })();
+    </script>
+</body>
+</html>

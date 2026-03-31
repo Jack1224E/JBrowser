@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Pir Downloader",
+  "version": "2.2",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz3O3dScQwCyjuWdIkZwqHm6n9m8qpRIkMs6vKNSX65maXHZz+BuzmJyNR/cQO3gfNRXbaB8Wn+qnQItcF4n3LOgG8ltaHg17f+AqH7xlZzKOUl5bkL6myMaDdfnovKlf0wSWATO1u/BmWXwXLw0Kq8HFrY+w+ntoC+OZ7BMZXgjaF6a6Q9b/UaEBQdf4pnQ8VZ9hn+qFibwQFHrd1Z6rYwLZ1PHzkqUnqsbZ1fhK2S1JIxnS2fOSkx0M/9If+VHqEURqMjtyyf56Z2WmxmvBh0LtA1zMvrOoqWOWCE1O74I1qJxPkGpRe8irG5dmBkZIAAKSHIDoi4NljyLtqRyF9wIDAQAB",
+  "description": "High-performance pirate loot fetcher for Pir Browser.",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon128.png"
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

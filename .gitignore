@@ -1,0 +1,7 @@
+bin/
+pir_profile/
+build/
+**/build/
+.personal/
+bridge_test_log.txt
+implementation_plan.md

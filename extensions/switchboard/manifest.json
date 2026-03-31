@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Pirate Switchboard",
+  "version": "1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxWrHLZbElEgsCgeCAKSjCQsULLSD1G7Xym6NNs+Pp36xZLIQ1ecFil0XtCBA14HygFDwPE2y+knAEt3TOw1fCGlMNe/N2Yjd12iJSBz+1dacgI+miXcuPUEC8ztoLUUN97ISDZdR+25TCAYrr57DhelHyLaPqkrCVLjDeSa1vCxBcbQPp7oc7uc0fTOYMoQ6bUpmnKWuqptyFmkvAym5jM0dZW9/9fXHIAP/rVerfk4ViGvK69RfvVko1y8UFzCtEr5iBgFWnKLIdVJ+DHldAsRzuuA+QsV28WsjUtBkNIychUgNEU8iLSqDUOUHjHvipRFjp/04h3/UQe8LvVXj1wIDAQAB",
+  "description": "Zero-Setup Proxy Switchboard for the Pir Browser.",
+  "permissions": [
+    "proxy",
+    "storage",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "128": "icon.png"
+  }
+}

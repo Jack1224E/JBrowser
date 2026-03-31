@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            width: 300px;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #f4ecd8;
+            color: #022c22;
+        }
+        .header {
+            background: linear-gradient(135deg, #022c22 0%, #034a38 100%);
+            color: #f4ecd8;
+            padding: 14px 16px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .header::before { content: "⚓"; font-size: 18px; }
+
+        .status-bar {
+            background: #e8dcc4;
+            padding: 8px 16px;
+            font-size: 11px;
+            color: #6b5b3e;
+            border-bottom: 1px solid #d4c5a5;
+        }
+        .status-bar .active-mode {
+            font-weight: 700;
+            color: #022c22;
+        }
+
+        .mode-list { padding: 8px; }
+
+        .mode-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 10px 12px;
+            margin-bottom: 4px;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            background: #fff;
+            color: #022c22;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            text-align: left;
+        }
+        .mode-btn:hover {
+            background: #e8f5e9;
+            border-color: #76a15d;
+            transform: translateX(3px);
+        }
+        .mode-btn.active {
+            background: #022c22;
+            color: #f4ecd8;
+            border-color: #76a15d;
+            font-weight: 700;
+        }
+        .mode-btn .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .mode-btn .desc {
+            font-size: 10px;
+            opacity: 0.7;
+            font-weight: 400;
+            display: block;
+            margin-top: 2px;
+        }
+
+        .divider {
+            height: 1px;
+            background: #d4c5a5;
+            margin: 4px 12px;
+        }
+
+        .section-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: #8a7a5c;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            padding: 6px 16px 2px;
+        }
+
+        .footer {
+            padding: 8px 16px;
+            font-size: 10px;
+            color: #8a7a5c;
+            text-align: center;
+            border-top: 1px solid #d4c5a5;
+        }
+        .footer a {
+            color: #034a38;
+            text-decoration: none;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">SWITCHBOARD</div>
+    <div class="status-bar">
+        Active: <span class="active-mode" id="activeLabel">Loading...</span>
+    </div>
+
+    <div class="section-label">Quick Modes</div>
+    <div class="mode-list">
+        <button class="mode-btn" data-mode="direct">
+            <span class="dot" style="background: #343a40"></span>
+            <div>🌑 Direct (No Proxy)
+                <span class="desc">Raw ISP speed. No tunneling.</span>
+            </div>
+        </button>
+        <button class="mode-btn" data-mode="auto">
+            <span class="dot" style="background: #76a15d"></span>
+            <div>🏴‍☠️ Auto-Switch (Smart)
+                <span class="desc">Routes only blocked/pirate sites through tunnel.</span>
+            </div>
+        </button>
+    </div>
+
+    <div class="divider"></div>
+    <div class="section-label">Tunnel Services</div>
+    <div class="mode-list">
+        <button class="mode-btn" data-mode="warp">
+            <span class="dot" style="background: #f48120"></span>
+            <div>🔥 WARP Tunnel (Cloudflare)
+                <span class="desc">Free & fast. Requires warp-cli setup.</span>
+            </div>
+        </button>
+        <button class="mode-btn" data-mode="tor">
+            <span class="dot" style="background: #6f42c1"></span>
+            <div>🛡️ Tor (Anonymity)
+                <span class="desc">Max privacy. Requires tor service.</span>
+            </div>
+        </button>
+        <button class="mode-btn" data-mode="custom">
+            <span class="dot" style="background: #f0ad4e"></span>
+            <div>⚙️ Custom Tunnel
+                <span class="desc">Your own proxy (default: HTTP 127.0.0.1:8118).</span>
+            </div>
+        </button>
+    </div>
+
+    <div class="footer">
+        <a href="https://one.one.one.one/" target="_blank">Get Cloudflare WARP →</a><br>
+        Pir Browser v1.0
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

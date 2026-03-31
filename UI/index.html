@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pir Browser - Interceptor</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #1a1a1a;
+      color: #bbbbbb;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 20px;
+      border-bottom: 1px solid #333;
+    }
+
+    .title-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .anchor-icon {
+      font-size: 24px;
+      color: #4facfe;
+    }
+
+    .app-title {
+      color: #4facfe;
+      font-size: 20px;
+      font-weight: 500;
+    }
+
+    .controls-container {
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      color: #888;
+    }
+
+    .connections-dropdown {
+      margin-left: 10px;
+      background-color: #222;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 4px 8px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .main-content {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .status-text {
+      font-style: italic;
+      color: #666;
+      font-size: 18px;
+    }
+
+    .downloading-text {
+      font-style: normal;
+      color: #4facfe;
+      font-size: 18px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    <div class="title-container">
+      <span class="anchor-icon">⚓</span>
+      <span class="app-title">Direct Downloads</span>
+    </div>
+    <div class="controls-container">
+      <span>Max Connections:</span>
+      <select id="max-connections" class="connections-dropdown">
+        <option value="32" selected>32</option>
+        <option value="16">16</option>
+        <option value="8">8</option>
+        <option value="4">4</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <div id="status-container" class="status-text">
+      Waiting for interception signals...
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

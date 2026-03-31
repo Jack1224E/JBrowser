@@ -1,0 +1,10 @@
+{
+  "name": "com.pir.browser.engine",
+  "description": "Pir Engine Host",
+  "path": "/home/jack/Documents/Pir Browser/core_bridge/pir_host_launcher.sh",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://jlclojmcifniclnahffcmhocbccljfgc/",
+    "chrome-extension://mfkdafmmppeidkmpnfjminnjimjikigl/"
+  ]
+}
