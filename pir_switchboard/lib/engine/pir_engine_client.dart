@@ -27,10 +27,13 @@ class PirEngineClient {
     }
   }
 
-  Future<String> addUri(String url, {Map<String, String>? headers}) async {
+  Future<String> addUri(String url, {Map<String, String>? headers, String? gid}) async {
     final options = <String, dynamic>{};
     if (headers != null && headers.isNotEmpty) {
       options['header'] = headers.entries.map((e) => '${e.key}: ${e.value}').toList();
+    }
+    if (gid != null) {
+      options['gid'] = gid;
     }
 
     final res = await _call('aria2.addUri', [[url], options]);

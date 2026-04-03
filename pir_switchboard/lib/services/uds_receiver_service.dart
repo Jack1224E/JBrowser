@@ -46,20 +46,36 @@ class UdsReceiverService {
             final payload = jsonDecode(message) as Map<String, dynamic>;
             
             if (payload['url'] != null) {
-              final url = payload['url'] as String;
-              final requestId = payload['requestId'] as String?;
               final headers = Map<String, String>.from(payload['headers'] ?? {});
 
-              stderr.writeln('[UDS] Received: requestId=$requestId url=$url');
+              // 1. App-Level Idempotency (Layer 3)
+              final requestId = payload['requestId'] as String?;
+              final url = payload['url'] as String?;
+              final gid = payload['gid'] as String?;
+              
+              if (requestId == null || url == null || gid == null) {
+                stderr.writeln('[UdsReceiver] MALFORMED PAYLOAD: $payload');
+                return;
+              }
 
-              // 1. Optimistic UI Update (with idempotency guard)
-              ref.read(downloadListProvider.notifier).addPending(url, requestId: requestId);
-
-              // 2. Engine Handoff (Async)
-              _client.addUri(url, headers: headers).catchError((e) {
-                stderr.writeln('[UDS] Engine Handoff Error: $e');
-                return 'error';
-              });
+              final notifier = ref.read(downloadListProvider.notifier);
+              if (notifier.tryClaim(requestId: requestId, url: url, gid: gid)) {
+                stderr.writeln('[UdsReceiver] Claimed NEW link: $requestId');
+                
+                // 2. Engine Handoff (Layer 4)
+                _client.addUri(url, headers: headers, gid: gid).then((_) {
+                   stderr.writeln('[UdsReceiver] Engine accepted: $gid');
+                }).catchError((e) {
+                  // LAYER 4: The Neck-Snapper
+                  final errorMsg = e.toString();
+                  if (errorMsg.contains('is already in use')) {
+                    stderr.writeln('[DEDUP_ENGINE] Suppressed parallel spawn: $gid');
+                  } else {
+                    stderr.writeln('[UdsReceiver] Engine Error: $e');
+                  }
+                  return 'error';
+                });
+              }
             }
           } catch (e) {
             stderr.writeln('[UDS] Decoding Error: $e');

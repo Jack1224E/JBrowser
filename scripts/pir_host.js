@@ -21,6 +21,9 @@ const SWITCHBOARD_BIN = '/home/jack/Documents/JBrowser/pir_switchboard/build/lin
 const PENDING_LINKS_DIR = path.join(os.homedir(), '.local', 'state', 'jbrowser');
 const PENDING_LINKS_FILE = path.join(PENDING_LINKS_DIR, 'pending_links.jsonl');
 
+const DEDUP_FILE = path.join(process.env.XDG_RUNTIME_DIR || '/tmp', 'jbrowser', 'dedup.tmp');
+const seenRequests = new Set();
+
 // ═══════════════════════════════════════════
 // §0  LOGGING (writes to stderr + file)
 // ═══════════════════════════════════════════
@@ -86,22 +89,76 @@ function markJournalDelivered(requestId) {
 // §0c IDEMPOTENCY — TTL-based requestId Cache (5s)
 // ═══════════════════════════════════════════
 
-const seenRequests = new Map();
-const DEDUP_TTL_MS = 5000;
-
+/**
+ * LAYER 1: POSIX tmpfs Ledger
+ * Atomic deduplication surviving process restarts via synchronous tmpfs logging.
+ */
 function isDuplicate(requestId) {
     if (!requestId) return false;
-    const now = Date.now();
+
+    // 1. O(1) Memory Check
     if (seenRequests.has(requestId)) {
-        log(`DUPLICATE SUPPRESSED (bridge-level): requestId=${requestId}`);
+        log(`[DEDUP_MEM_CACHE] requestId=${requestId}`);
         return true;
     }
-    seenRequests.set(requestId, now);
-    // Housekeeping: evict expired entries
-    for (const [key, ts] of seenRequests) {
-        if ((now - ts) > DEDUP_TTL_MS) seenRequests.delete(key);
+
+    // 2. POSIX tmpfs Sync (handles bridge restarts)
+    try {
+        if (!fs.existsSync(path.dirname(DEDUP_FILE))) fs.mkdirSync(path.dirname(DEDUP_FILE), { recursive: true });
+        
+        // Hydrate from file if memory is empty
+        if (seenRequests.size === 0 && fs.existsSync(DEDUP_FILE)) {
+            const content = fs.readFileSync(DEDUP_FILE, 'utf8');
+            content.split('\n').filter(Boolean).forEach(id => seenRequests.add(id));
+            log(`[DEDUP_HYDRATE] Loaded ${seenRequests.size} IDs from ledger.`);
+            
+            if (seenRequests.has(requestId)) {
+                log(`[DEDUP_POSIX_LEDGER] requestId=${requestId}`);
+                return true;
+            }
+        }
+
+        // 3. Atomic POSIX check (re-read to ensure no race between threads/processes)
+        if (fs.existsSync(DEDUP_FILE)) {
+            const content = fs.readFileSync(DEDUP_FILE, 'utf8');
+            if (content.includes(requestId)) {
+                seenRequests.add(requestId);
+                log(`[DEDUP_POSIX_RACE_PREVENTION] requestId=${requestId}`);
+                return true;
+            }
+        }
+
+        // 4. Register ID
+        fs.appendFileSync(DEDUP_FILE, requestId + '\n');
+        seenRequests.add(requestId);
+
+        // Housekeeping: Truncate if too many IDs
+        if (seenRequests.size > 1000) {
+            log('[DEDUP_GC] Set size > 1000, resetting ledger...');
+            seenRequests.clear();
+            if (fs.existsSync(DEDUP_FILE)) fs.writeFileSync(DEDUP_FILE, '');
+        }
+
+        return false;
+    } catch (e) {
+        log(`DEDUP ERROR: ${e.message}`);
+        return false;
     }
-    return false;
+}
+
+/**
+ * LAYER 2: Deterministic GID derivation (Manual Hash for zero-dependency portability)
+ * Returns a stable 16-hex character string from a requestId.
+ */
+function deriveGid(requestId) {
+    if (!requestId) return Math.random().toString(16).substring(2, 18);
+    let hash = 0;
+    for (let i = 0; i < requestId.length; i++) {
+        hash = ((hash << 5) - hash) + requestId.charCodeAt(i);
+        hash |= 0; // Convert to 32bit integer
+    }
+    // Convert to positive hex and pad to 16 chars
+    return Math.abs(hash).toString(16).padStart(16, '0');
 }
 
 // ═══════════════════════════════════════════
@@ -168,14 +225,17 @@ async function handleMessage(msg) {
                 return;
             }
 
+            const gid = deriveGid(requestId);
+
             const payload = { 
                 url: url,
                 requestId: requestId,
+                gid: gid,
                 headers: dl.headers || {},
                 timestamp: new Date().toISOString()
             };
             
-            log(`Download request: requestId=${requestId} URL=${url}`);
+            log(`Download request: requestId=${requestId} gid=${gid} URL=${url}`);
 
             // § DEAD LETTER JOURNAL — persist before any IPC attempt
             journalLink(payload);
@@ -188,9 +248,9 @@ async function handleMessage(msg) {
             
             if (!udsSuccess) {
                 log('UDS failed. Attempting Switchboard launch with URL.');
-                attemptSwitchboardLaunch(url, requestId);
+                attemptSwitchboardLaunch(url, requestId, gid);
                 
-                // Exponential backoff UDS retry loop
+                // LAYER 5: Exponential Backoff UDS retry loop
                 const retrySuccess = await waitForUds(payload, 4000);
                 log(`UDS Backoff result: ${retrySuccess}`);
 
@@ -217,7 +277,7 @@ async function handleMessage(msg) {
 // §3  SWITCHBOARD LAUNCH (Full Sterilization)
 // ═══════════════════════════════════════════
 
-function attemptSwitchboardLaunch(url, requestId) {
+function attemptSwitchboardLaunch(url, requestId, gid) {
     try {
         log(`Checking Switchboard at: ${SWITCHBOARD_BIN}`);
         if (fs.existsSync(SWITCHBOARD_BIN)) {
@@ -250,8 +310,8 @@ function attemptSwitchboardLaunch(url, requestId) {
 
             log(`Sterilized environment (9 keys scrubbed, XDG_DATA_DIRS sanitized).`);
 
-            // CLI args: pass URL and requestId for sink-level deduplication
-            const args = ['--download-url', url, '--request-id', requestId];
+            // CLI args: pass URL, requestId, and GID
+            const args = ['--download-url', url, '--request-id', requestId, '--gid', gid];
             log(`Spawn args: [${args.join(', ')}]`);
 
             const child = spawn(SWITCHBOARD_BIN, args, {
@@ -297,7 +357,7 @@ function attemptSwitchboardLaunch(url, requestId) {
 // §4  UDS HANDOFF
 // ═══════════════════════════════════════════
 
-async function waitForUds(payload, deadlineMs, delay = 200) {
+async function waitForUds(payload, deadlineMs, delay = 150) {
     const start = Date.now();
     const socketPath = getSocketPath();
 

@@ -12,15 +12,18 @@ import 'models/download_status.dart';
 import 'services/uds_receiver_service.dart';
 
 void main(List<String> args) {
-  // Parse named CLI arguments: --download-url <url> --request-id <id>
+  // Parse named CLI arguments: --download-url <url> --request-id <id> --gid <gid>
   String? initialUrl;
   String? initialRequestId;
+  String? initialGid;
 
   for (int i = 0; i < args.length; i++) {
     if (args[i] == '--download-url' && i + 1 < args.length) {
       initialUrl = args[i + 1];
     } else if (args[i] == '--request-id' && i + 1 < args.length) {
       initialRequestId = args[i + 1];
+    } else if (args[i] == '--gid' && i + 1 < args.length) {
+      initialGid = args[i + 1];
     }
   }
 
@@ -29,8 +32,11 @@ void main(List<String> args) {
     initialUrl = args.first;
   }
   
+  // If we have a URL but no GID (legacy), generate a pending one
+  initialGid ??= 'pending-${DateTime.now().millisecondsSinceEpoch}';
+  
   if (initialUrl != null) {
-    stderr.writeln('[Switchboard] Received CLI URL: $initialUrl (requestId: $initialRequestId)');
+    stderr.writeln('[Switchboard] Received CLI URL: $initialUrl (requestId: $initialRequestId, gid: $initialGid)');
   } else {
     stderr.writeln('[Switchboard] No CLI URL received. Awaiting UDS/manual input.');
   }
@@ -38,8 +44,9 @@ void main(List<String> args) {
   runApp(
     ProviderScope(
       child: AppLifecycleObserver(
-        initialUrl: initialUrl,
-        initialRequestId: initialRequestId,
+        cliUrl: initialUrl,
+        cliRequestId: initialRequestId,
+        cliGid: initialGid,
         child: const PirSwitchboardApp(),
       ),
     ),
@@ -48,9 +55,10 @@ void main(List<String> args) {
 
 class AppLifecycleObserver extends ConsumerStatefulWidget {
   final Widget child;
-  final String? initialUrl;
-  final String? initialRequestId;
-  const AppLifecycleObserver({super.key, required this.child, this.initialUrl, this.initialRequestId});
+  final String? cliUrl;
+  final String? cliRequestId;
+  final String? cliGid;
+  const AppLifecycleObserver({super.key, required this.child, this.cliUrl, this.cliRequestId, this.cliGid});
 
   @override
   ConsumerState<AppLifecycleObserver> createState() => _AppLifecycleObserverState();
@@ -58,6 +66,7 @@ class AppLifecycleObserver extends ConsumerStatefulWidget {
 
 class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> {
   late final AppLifecycleListener _listener;
+  bool _cliSubmitted = false;
 
   @override
   void initState() {
@@ -74,9 +83,10 @@ class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> {
       }
 
       // Process CLI URL if provided
-      if (widget.initialUrl != null) {
-        stderr.writeln('[Switchboard] Auto-submitting CLI URL: ${widget.initialUrl} (requestId: ${widget.initialRequestId})');
-        _submitUrlWhenReady(widget.initialUrl!, requestId: widget.initialRequestId);
+      if (widget.cliUrl != null && !_cliSubmitted) {
+        _cliSubmitted = true;
+        stderr.writeln('[Switchboard] Auto-submitting CLI URL: ${widget.cliUrl} (requestId: ${widget.cliRequestId}, gid: ${widget.cliGid})');
+        _submitUrlWhenReady(widget.cliUrl!, requestId: widget.cliRequestId, gid: widget.cliGid);
       }
 
       // Sweep the dead letter journal for missed links
@@ -97,17 +107,33 @@ class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> {
     );
   }
 
-  /// Wait for the engine to be connected, then submit the URL
-  void _submitUrlWhenReady(String url, {String? requestId}) {
+  /// Wait for the engine to be connected, then submit the URL (with Layer 3/4)
+  void _submitUrlWhenReady(String url, {String? requestId, String? gid}) {
+    if (gid == null) {
+      stderr.writeln('[Switchboard] Error: CLI URL provided without GID. Dropping.');
+      return;
+    }
+
     ref.listenManual<EngineProcessState>(engineProcessProvider, (prev, next) {
       if (next.status == EngineStatus.connected) {
-        stderr.writeln('[Switchboard] Engine connected. Submitting URL: $url (requestId: $requestId)');
-        ref.read(downloadListProvider.notifier).addPending(url, requestId: requestId);
-        PirEngineClient().addUri(url).then((_) {
-          stderr.writeln('[Switchboard] URL submitted to engine successfully.');
-        }).catchError((e) {
-          stderr.writeln('[Switchboard] Engine submission error: $e');
-        });
+        final notifier = ref.read(downloadListProvider.notifier);
+        
+        // Layer 3: Synchronous Bouncer
+        if (notifier.tryClaim(requestId: requestId ?? gid, url: url, gid: gid)) {
+          stderr.writeln('[Switchboard] Claimed CLI URL: $url (gid: $gid)');
+          
+          // Layer 4: Engine Arbiter
+          PirEngineClient().addUri(url, gid: gid).then((_) {
+            stderr.writeln('[Switchboard] CLI URL accepted by engine.');
+          }).catchError((e) {
+            final errorMsg = e.toString();
+            if (errorMsg.contains('is already in use')) {
+              stderr.writeln('[DEDUP_ENGINE] Suppressed parallel CLI spawn: $gid');
+            } else {
+              stderr.writeln('[Switchboard] CLI Engine Error: $e');
+            }
+          });
+        }
       }
     });
   }
@@ -138,11 +164,22 @@ class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> {
 
           if (url != null) {
             final requestId = entry['requestId'] as String?;
-            ref.read(downloadListProvider.notifier).addPending(url, requestId: requestId);
-            PirEngineClient().addUri(url).catchError((e) {
-              stderr.writeln('[Switchboard] Journal rehydration error for $url: $e');
-              return 'error';
-            });
+            final gid = entry['gid'] as String? ?? 'journal-${DateTime.now().millisecondsSinceEpoch}';
+            
+            final notifier = ref.read(downloadListProvider.notifier);
+            if (notifier.tryClaim(requestId: requestId ?? gid, url: url, gid: gid)) {
+              stderr.writeln('[Switchboard] Claimed journal entry: $requestId');
+              
+              PirEngineClient().addUri(url, gid: gid).catchError((e) {
+                final errorMsg = e.toString();
+                if (errorMsg.contains('is already in use')) {
+                  stderr.writeln('[DEDUP_ENGINE] Suppressed parallel journal rehydration: $gid');
+                } else {
+                  stderr.writeln('[Switchboard] Journal rehydration error for $url: $e');
+                }
+                return 'error';
+              });
+            }
           }
         } catch (e) {
           stderr.writeln('[Switchboard] Skipping malformed journal entry: $e');
