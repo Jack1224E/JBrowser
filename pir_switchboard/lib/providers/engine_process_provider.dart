@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/legacy.dart';
 import '../services/path_resolver.dart';
 
+
 enum EngineStatus { disconnected, starting, connected, error }
 
 class EngineProcessState {
@@ -65,6 +66,8 @@ class EngineProcessNotifier extends StateNotifier<EngineProcessState> {
 
       // Warm-up phase: Wait for RPC to be available
       await _waitForRpc();
+
+      // UDS Server is now started by AppLifecycleObserver in main.dart
 
       state = EngineProcessState(
         status: EngineStatus.connected,

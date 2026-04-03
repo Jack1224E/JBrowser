@@ -7,6 +7,7 @@ class DownloadStatus {
   final int uploadSpeed;
   final String? dir;
   final List<String> files;
+  final String? requestId;
 
   DownloadStatus({
     required this.gid,
@@ -17,6 +18,7 @@ class DownloadStatus {
     required this.uploadSpeed,
     this.dir,
     required this.files,
+    this.requestId,
   });
 
   factory DownloadStatus.fromJson(Map<String, dynamic> json) {

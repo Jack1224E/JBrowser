@@ -49,6 +49,35 @@ class DownloadListNotifier extends StateNotifier<AsyncValue<List<DownloadStatus>
     state = const AsyncValue.data([]);
   }
 
+  /// Idempotent insert: if a requestId already exists in state, skip the insert.
+  void addPending(String url, {String? requestId}) {
+    if (state is AsyncData) {
+      final currentList = state.value ?? [];
+
+      // IDEMPOTENCY GATE: check if this requestId was already inserted
+      if (requestId != null) {
+        final alreadyExists = currentList.any((d) => d.requestId == requestId);
+        if (alreadyExists) return; // One click = One ID = One UI Tile
+      }
+
+      final pendingGid = 'pending-${DateTime.now().millisecondsSinceEpoch}';
+      final fileName = url.split('/').last.split('?').first;
+      
+      final pendingDownload = DownloadStatus(
+        gid: pendingGid,
+        status: 'pending',
+        totalLength: 0,
+        completedLength: 0,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        files: [fileName],
+        requestId: requestId,
+      );
+
+      state = AsyncValue.data([pendingDownload, ...currentList]);
+    }
+  }
+
   @override
   void dispose() {
     _stopPolling();
