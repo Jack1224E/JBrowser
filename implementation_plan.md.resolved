@@ -1,0 +1,71 @@
+# JBrowser Vault: FAANG-Grade Master Plan (v2.0)
+
+This document outlines the surgical implementation of the "Boot Gate," "Ghost Lifecycle," and "Optimistic Task Control" to achieve a state-of-the-art, flicker-free, and leak-proof vault experience.
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Blocking Boot**: The application will now show a splash screen (or remain hidden) until the `aria2c` RPC connection is established and the state is fully rehydrated. This ensures the "First Download Amnesia" is permanently resolved.
+> 
+> **Process Authority**: The vault will now have total authority over its background processes. Closing the window will **never** kill the engine; only an explicit "Exit" from the tray will trigger the full shutdown sequence.
+
+---
+
+## Proposed Changes
+
+### PHASE 1: THE BOOT GATE (FIXING AMNESIA)
+
+#### [MODIFY] [main.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/main.dart)
+- **Initialization Rewrite**:
+  - Integrate `window_manager` to ensure the window starts hidden or in a controlled state.
+  - Implement a `Completer`-based barrier that waits for `EngineStatus.connected`.
+  - **Rehydration**: Before `runApp`, perform a bulk RPC query (`tellActive`, `tellWaiting`, `tellStopped`).
+  - **State Injection**: Push the retrieved engine state into the `DownloadListProvider` to ensure the UI is fully populated before the first frame reveals.
+  - **Sequential Handoff**: Only after hydration, trigger `_sweepDeadLetterJournal()` and process CLI arguments.
+
+---
+
+### PHASE 2: THE GHOST LIFECYCLE (FIXING LEAKS)
+
+#### [NEW] [tray_service.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/services/tray_service.dart)
+- Initialize `tray_manager` with the JBrowser icon.
+- Implement the "Open" (restore window) and "Exit" (trigger kill sequence) context menu items.
+
+#### [MODIFY] [main.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/main.dart)
+- **Window Interception**:
+  - Call `windowManager.setPreventClose(true)`.
+  - Implement `onWindowClose()` to call `windowManager.hide()` instead of terminating.
+- **The Kill Sequence**:
+  - Define a global `vaultExit()` function:
+    1.  `windowManager.hide()` (Instant UI removal).
+    2.  `udsServiceProvider.stop()` (UDS release).
+    3.  `engineClient.shutdown()` (Aria2c graceful kill).
+    4.  `exit(0)`.
+
+---
+
+### PHASE 3: OPTIMISTIC TASK CONTROL (FIXING FLICKER)
+
+#### [MODIFY] [pir_engine_client.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/engine/pir_engine_client.dart)
+- Implement RPC wrappers for `aria2.pause`, `aria2.unpause`, `aria2.remove`, and `aria2.removeDownloadResult`.
+
+#### [MODIFY] [download_list_provider.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/providers/download_list_provider.dart)
+- **Optimistic State**: Extend `DownloadStatus` with intermediate states: `pausing`, `resuming`, `deleting`.
+- **UI Masking**: When an action is triggered, immediately update the local state to the intermediate status.
+
+#### [MODIFY] [polling_isolate.dart](file:///home/jack/Documents/JBrowser/pir_switchboard/lib/engine/polling_isolate.dart)
+- **Poll Guard**: Update the reducer to check the current task status. If it matches an intermediate status, **skip** the update for that specific GID until the next poll cycle (or until the engine state catches up).
+
+---
+
+## Verification Plan
+
+### Automated Verification
+- **Cold Boot Audit**: Use `mock_bridge_signal.py` to send a link *before* the app is launched. Verify the app correctly rehydrates and displays the link instantly on boot.
+- **Leak Audit**: Verify `pgrep -x aria2c` is empty after "Exit" but remains active after "X" (Close).
+
+### Manual Verification
+- **Flicker Test**: Pause a high-speed download and verify the progress bar/status changes instantly without a 1.5s delay.
+- **Tray Flow**: Verify the context menu restores the window from a hidden state.
+
+[WAITING FOR PLAN APPROVAL]
