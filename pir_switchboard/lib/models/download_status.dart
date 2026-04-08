@@ -29,11 +29,36 @@ class DownloadStatus {
       completedLength: int.parse(json['completedLength'] ?? '0'),
       downloadSpeed: int.parse(json['downloadSpeed'] ?? '0'),
       uploadSpeed: int.parse(json['uploadSpeed'] ?? '0'),
-      dir: json['dir'] as String?,
+      dir: (json['dir'] as String?) ?? (json['dir'] != null ? json['dir'].toString() : null),
       files: (json['files'] as List<dynamic>?)
               ?.map((f) => f['path'] as String)
               .toList() ??
           [],
+      requestId: json['requestId'] as String?,
+    );
+  }
+
+  DownloadStatus copyWith({
+    String? gid,
+    String? status,
+    int? totalLength,
+    int? completedLength,
+    int? downloadSpeed,
+    int? uploadSpeed,
+    String? dir,
+    List<String>? files,
+    String? requestId,
+  }) {
+    return DownloadStatus(
+      gid: gid ?? this.gid,
+      status: status ?? this.status,
+      totalLength: totalLength ?? this.totalLength,
+      completedLength: completedLength ?? this.completedLength,
+      downloadSpeed: downloadSpeed ?? this.downloadSpeed,
+      uploadSpeed: uploadSpeed ?? this.uploadSpeed,
+      dir: dir ?? this.dir,
+      files: files ?? this.files,
+      requestId: requestId ?? this.requestId,
     );
   }
 
@@ -41,6 +66,12 @@ class DownloadStatus {
   
   String get fileName {
     if (files.isEmpty) return "Unknown";
-    return files.first.split('/').last;
+    final path = files.first;
+    return path.contains('/') ? path.split('/').last : (path.contains('\\') ? path.split('\\').last : path);
   }
+
+  bool get isIntermediate => 
+      status == 'pausing' || 
+      status == 'resuming' || 
+      status == 'deleting';
 }

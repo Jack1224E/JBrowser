@@ -3,8 +3,12 @@ import 'package:path/path.dart' as p;
 
 class PirPathResolver {
   static Future<String> findAria2c() async {
-    // 1. Check common Linux paths (CachyOS/Arch base)
+    // 1. Prioritize Local Vault Binary (Production Contract)
+    final home = Platform.environment['HOME'] ?? '/home/jack';
+    final localPath = p.join(home, 'Documents', 'JBrowser', 'bin', 'aria2c');
+    
     final commonPaths = [
+      localPath,
       '/usr/bin/aria2c',
       '/usr/local/bin/aria2c',
     ];

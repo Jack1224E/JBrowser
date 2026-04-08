@@ -17,22 +17,35 @@ const path = require('path');
 const os = require('os');
 
 const ARIA2_RPC_URL = 'http://127.0.0.1:6800/jsonrpc';
-const SWITCHBOARD_BIN = '/home/jack/Documents/JBrowser/pir_switchboard/build/linux/x64/debug/bundle/pir_switchboard';
-const PENDING_LINKS_DIR = path.join(os.homedir(), '.local', 'state', 'jbrowser');
-const PENDING_LINKS_FILE = path.join(PENDING_LINKS_DIR, 'pending_links.jsonl');
+const SWITCHBOARD_BIN = '/home/jack/Documents/JBrowser/pir_switchboard/build/linux/x64/release/bundle/pir_switchboard';
 
-const DEDUP_FILE = path.join(process.env.XDG_RUNTIME_DIR || '/tmp', 'jbrowser', 'dedup.tmp');
+// SOTA Central Vault Queue
+const VAULT_QUEUE_DIR = path.join(os.homedir(), '.local', 'state', 'jbrowser', 'vault', 'queue');
+
+const DEDUP_FILE = path.join(os.homedir(), '.local', 'state', 'jbrowser', 'vault', 'dedup.tmp');
 const seenRequests = new Set();
+
 
 // ═══════════════════════════════════════════
 // §0  LOGGING (writes to stderr + file)
 // ═══════════════════════════════════════════
 
+const BOOT_TRACE_LOG = path.join(os.homedir(), '.local', 'state', 'jbrowser', 'boot_trace.log');
+
+function trace(msg) {
+    const hrNow = Date.now() + process.hrtime()[1] / 1e6;
+    const logLine = `[${hrNow.toFixed(3)}] ${msg}\n`;
+    try { fs.appendFileSync(BOOT_TRACE_LOG, logLine); } catch (_) {}
+}
+
 function log(msg) {
     const logLine = `[PirHost] ${new Date().toISOString()} - ${msg}\n`;
     process.stderr.write(logLine);
     try { fs.appendFileSync('/tmp/pir_bridge_debug.log', logLine); } catch (_) {}
+    trace(`[PirHost] ${msg}`); // Forward to trace as well
 }
+
+trace('[PIR_HOST_TRACE] Native Messaging Host Execution Entrance');
 
 // ═══════════════════════════════════════════
 // §0a DYNAMIC SOCKET PATH (no hardcoded UID)
@@ -47,43 +60,35 @@ function getSocketPath() {
 }
 
 // ═══════════════════════════════════════════
-// §0b DEAD LETTER JOURNAL (Resilient Delivery with Receipts)
+// §0b CENTRAL VAULT ENQUEUE (Synchronous Atomic Guarantee)
 // ═══════════════════════════════════════════
 
-function journalLink(payload) {
+function enqueueVaultTask(payload) {
     try {
-        fs.mkdirSync(PENDING_LINKS_DIR, { recursive: true });
+        log(`[PRODUCER] Checking directory: ${VAULT_QUEUE_DIR}`);
+        fs.mkdirSync(VAULT_QUEUE_DIR, { recursive: true });
+        
+        // High-resolution timestamp for telemetry audit
+        const hrNow = Date.now() + process.hrtime()[1] / 1e6;
+
         const entry = JSON.stringify({
             ...payload,
-            journaled_at: new Date().toISOString(),
-            delivered_at: null    // Receipt: null = undelivered
-        }) + '\n';
-        fs.appendFileSync(PENDING_LINKS_FILE, entry);
-        log(`Dead letter journaled: ${payload.url}`);
+            journaled_at_iso: new Date().toISOString(),
+            journaled_at_hr: hrNow
+        }, null, 2);
+        
+        // Atomic write to central vault using deterministic GID
+        const taskFile = path.join(VAULT_QUEUE_DIR, `${payload.gid}.json`);
+        const tmpFile = taskFile + '.tmp';
+        
+        fs.writeFileSync(tmpFile, entry);
+        fs.renameSync(tmpFile, taskFile); // Guarantee atomicity
+        log(`[PRODUCER] Writing GID: ${payload.gid} to ${taskFile}`);
     } catch (e) {
-        log(`JOURNAL ERROR: ${e.message}`);
+        log(`VAULT ENQUEUE ERROR: ${e.message}`);
     }
 }
 
-/** Stamp a journal entry as delivered so the Flutter sweep ignores it. */
-function markJournalDelivered(requestId) {
-    try {
-        if (!fs.existsSync(PENDING_LINKS_FILE)) return;
-        const lines = fs.readFileSync(PENDING_LINKS_FILE, 'utf8').split('\n').filter(Boolean);
-        const updated = lines.map(line => {
-            try {
-                const entry = JSON.parse(line);
-                if (entry.requestId === requestId && !entry.delivered_at) {
-                    entry.delivered_at = new Date().toISOString();
-                }
-                return JSON.stringify(entry);
-            } catch (_) { return line; }
-        }).join('\n') + '\n';
-        fs.writeFileSync(PENDING_LINKS_FILE, updated);
-    } catch (e) {
-        log(`JOURNAL RECEIPT ERROR: ${e.message}`);
-    }
-}
 
 // ═══════════════════════════════════════════
 // §0c IDEMPOTENCY — TTL-based requestId Cache (5s)
@@ -151,14 +156,19 @@ function isDuplicate(requestId) {
  * Returns a stable 16-hex character string from a requestId.
  */
 function deriveGid(requestId) {
-    if (!requestId) return Math.random().toString(16).substring(2, 18);
-    let hash = 0;
-    for (let i = 0; i < requestId.length; i++) {
-        hash = ((hash << 5) - hash) + requestId.charCodeAt(i);
-        hash |= 0; // Convert to 32bit integer
+    if (!requestId) return Math.random().toString(16).substring(2, 18).padStart(16, '0');
+    try {
+        const crypto = require('crypto');
+        return crypto.createHash('md5').update(requestId).digest('hex').substring(0, 16);
+    } catch (e) {
+        // Fallback if crypto fails
+        let hash = 0;
+        for (let i = 0; i < requestId.length; i++) {
+            hash = ((hash << 5) - hash) + requestId.charCodeAt(i);
+            hash |= 0;
+        }
+        return Math.abs(hash).toString(16).padStart(16, '0');
     }
-    // Convert to positive hex and pad to 16 chars
-    return Math.abs(hash).toString(16).padStart(16, '0');
 }
 
 // ═══════════════════════════════════════════
@@ -221,6 +231,8 @@ async function handleMessage(msg) {
 
             // IDEMPOTENCY GATE
             if (isDuplicate(requestId)) {
+                log(`Duplicate request ignored: ${requestId}`);
+                attemptSwitchboardLaunch(); // Ensure the app launches even on dedupes
                 sendMessage({ id: msg.id, result: 'ok_deduped' });
                 return;
             }
@@ -237,33 +249,12 @@ async function handleMessage(msg) {
             
             log(`Download request: requestId=${requestId} gid=${gid} URL=${url}`);
 
-            // § DEAD LETTER JOURNAL — persist before any IPC attempt
-            journalLink(payload);
+            // § 100% RELIABLE CENTRAL VAULT (No IPC)
+            enqueueVaultTask(payload);
             
-            // ═══════════════════════════════════════════
-            // § OPTIMISTIC IPC BRIDGE (UDS)
-            // ═══════════════════════════════════════════
-            const udsSuccess = await attemptUdsHandoff(payload);
-            log(`UDS Handoff result: ${udsSuccess}`);
-            
-            if (!udsSuccess) {
-                log('UDS failed. Attempting Switchboard launch with URL.');
-                attemptSwitchboardLaunch(url, requestId, gid);
-                
-                // LAYER 5: Exponential Backoff UDS retry loop
-                const retrySuccess = await waitForUds(payload, 4000);
-                log(`UDS Backoff result: ${retrySuccess}`);
-
-                if (retrySuccess) {
-                    markJournalDelivered(requestId);
-                } else {
-                    log('UDS backoff exhausted. Falling back to HTTP RPC.');
-                    const rpcOk = await attemptRpcFallback(url, payload.headers);
-                    if (rpcOk) markJournalDelivered(requestId);
-                }
-            } else {
-                markJournalDelivered(requestId);
-            }
+            // Still attempt to cold-boot Switchboard if it's dead, but do NOT pass URL arguments
+            // since the Downloader will natively sweep the Vault when it awakes.
+            attemptSwitchboardLaunch();
         }
 
         sendMessage({ id: msg.id, result: 'ok' });
@@ -277,7 +268,7 @@ async function handleMessage(msg) {
 // §3  SWITCHBOARD LAUNCH (Full Sterilization)
 // ═══════════════════════════════════════════
 
-function attemptSwitchboardLaunch(url, requestId, gid) {
+function attemptSwitchboardLaunch() {
     try {
         log(`Checking Switchboard at: ${SWITCHBOARD_BIN}`);
         if (fs.existsSync(SWITCHBOARD_BIN)) {
@@ -310,8 +301,8 @@ function attemptSwitchboardLaunch(url, requestId, gid) {
 
             log(`Sterilized environment (9 keys scrubbed, XDG_DATA_DIRS sanitized).`);
 
-            // CLI args: pass URL, requestId, and GID
-            const args = ['--download-url', url, '--request-id', requestId, '--gid', gid];
+            // CLI args: do not pass url, Switchboard polls the vault!
+            const args = [];
             log(`Spawn args: [${args.join(', ')}]`);
 
             const child = spawn(SWITCHBOARD_BIN, args, {
@@ -354,83 +345,7 @@ function attemptSwitchboardLaunch(url, requestId, gid) {
 }
 
 // ═══════════════════════════════════════════
-// §4  UDS HANDOFF
+// (IPC Removed in favor of Directory Queue)
 // ═══════════════════════════════════════════
-
-async function waitForUds(payload, deadlineMs, delay = 150) {
-    const start = Date.now();
-    const socketPath = getSocketPath();
-
-    async function poll(currentDelay) {
-        log(`Polling UDS (backoff): ${currentDelay}ms...`);
-        const success = await attemptUdsHandoff(payload);
-        if (success) return true;
-
-        if (Date.now() - start >= deadlineMs) {
-            log('UDS Poll Deadline Exceeded.');
-            return false;
-        }
-
-        await new Promise(r => setTimeout(r, currentDelay));
-        const nextDelay = Math.min(Math.floor(currentDelay * 1.5), 800);
-        return poll(nextDelay);
-    }
-
-    return poll(delay);
-}
-
-async function attemptUdsHandoff(payload) {
-    const socketPath = getSocketPath();
-    log(`Attempting UDS connection to: ${socketPath}`);
-    return new Promise((resolve) => {
-        const client = net.createConnection({ path: socketPath }, () => {
-            client.write(JSON.stringify(payload));
-            client.end();
-            log('Socket handoff successful.');
-            resolve(true);
-        });
-
-        client.setTimeout(200);
-        client.on('timeout', () => {
-            client.destroy();
-            resolve(false);
-        });
-
-        client.on('error', () => {
-            resolve(false);
-        });
-    });
-}
-
-// ═══════════════════════════════════════════
-// §5  HTTP RPC FALLBACK
-// ═══════════════════════════════════════════
-
-function attemptRpcFallback(url, headers) {
-    return new Promise((resolve) => {
-        const rpcPayload = JSON.stringify({
-            jsonrpc: '2.0',
-            id: 'pir-fallback-' + Date.now(),
-            method: 'aria2.addUri',
-            params: [[url], { header: Object.entries(headers).map(([k, v]) => `${k}: ${v}`) }]
-        });
-
-        const req = http.request(ARIA2_RPC_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        }, (res) => {
-            resolve(true);
-        });
-
-        req.on('error', (e) => {
-            process.stderr.write(`[PirHost] RPC Fallback Failed: ${e.message}\n`);
-            resolve(false);
-        });
-
-        req.write(rpcPayload);
-        req.end();
-    });
-}
-
 
 process.stderr.write('[PirHost] Native Messaging Host started.\n');

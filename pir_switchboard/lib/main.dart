@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,10 +10,42 @@ import 'providers/download_list_provider.dart';
 import 'widgets/download_tile.dart';
 import 'engine/pir_engine_client.dart';
 import 'models/download_status.dart';
-import 'services/uds_receiver_service.dart';
+import 'services/vault_queue_service.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'services/tray_service.dart';
+void main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Singleton Guard Phase
+  await _checkInstanceSingleton(args);
+  
+  // Phase 2: Ghost Lifecycle - Window Initialization
+  await windowManager.ensureInitialized();
+  
+  WindowOptions windowOptions = const WindowOptions(
+    size: Size(900, 700),
+    center: true,
+    backgroundColor: Colors.transparent,
+    skipTaskbar: false,
+    title: 'Pir Switchboard — Secured Vault',
+  );
 
-void main(List<String> args) {
-  // Parse named CLI arguments: --download-url <url> --request-id <id> --gid <gid>
+  await windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+    // Ghost Mode: Intercept "X" to hide instead of kill
+    await windowManager.setPreventClose(true);
+  });
+
+  // The Boot Gate logic has been moved to AppLifecycleObserver's _executeBootGate 
+  // so the Flutter UI can mount and render a secure "System Initializing" lock screen.
+  final container = ProviderContainer();
+
+  // 3. Tray Initialization
+  await container.read(trayServiceProvider).init(container);
+
+  // Parse named CLI arguments
   String? initialUrl;
   String? initialRequestId;
   String? initialGid;
@@ -27,22 +60,15 @@ void main(List<String> args) {
     }
   }
 
-  // Backwards compat: if no named args, treat first positional arg as URL
   if (initialUrl == null && args.isNotEmpty && !args.first.startsWith('--')) {
     initialUrl = args.first;
   }
   
-  // If we have a URL but no GID (legacy), generate a pending one
   initialGid ??= 'pending-${DateTime.now().millisecondsSinceEpoch}';
   
-  if (initialUrl != null) {
-    stderr.writeln('[Switchboard] Received CLI URL: $initialUrl (requestId: $initialRequestId, gid: $initialGid)');
-  } else {
-    stderr.writeln('[Switchboard] No CLI URL received. Awaiting UDS/manual input.');
-  }
-  
   runApp(
-    ProviderScope(
+    UncontrolledProviderScope(
+      container: container,
       child: AppLifecycleObserver(
         cliUrl: initialUrl,
         cliRequestId: initialRequestId,
@@ -64,144 +90,175 @@ class AppLifecycleObserver extends ConsumerStatefulWidget {
   ConsumerState<AppLifecycleObserver> createState() => _AppLifecycleObserverState();
 }
 
-class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> {
+class _AppLifecycleObserverState extends ConsumerState<AppLifecycleObserver> with WindowListener {
   late final AppLifecycleListener _listener;
   bool _cliSubmitted = false;
+  final Completer<void> _systemReady = Completer<void>();
 
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
 
-    // Start the UDS receiver so the bridge socket is available immediately
+    // Mount the Boot Gate barrier immediately after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      try {
-        final udsService = ref.read(udsServiceProvider);
-        await udsService.start();
-        stderr.writeln('[Switchboard] UDS Receiver started.');
-      } catch (e) {
-        stderr.writeln('[Switchboard] UDS start error: $e');
-      }
+      await _executeBootGate();
+    });
 
-      // Process CLI URL if provided
-      if (widget.cliUrl != null && !_cliSubmitted) {
-        _cliSubmitted = true;
-        stderr.writeln('[Switchboard] Auto-submitting CLI URL: ${widget.cliUrl} (requestId: ${widget.cliRequestId}, gid: ${widget.cliGid})');
-        _submitUrlWhenReady(widget.cliUrl!, requestId: widget.cliRequestId, gid: widget.cliGid);
+    // ACPI Sleep Suppression: Prevent OS sleep while downloads are active
+    ref.listenManual<AsyncValue<List<DownloadStatus>>>(downloadListProvider, (prev, next) {
+      final activeCount = next.value?.where((d) => d.status == 'active').length ?? 0;
+      if (activeCount > 0) {
+        WakelockPlus.enable();
+        stderr.writeln('[ACPI] Active downloads detected ($activeCount). Wakelock ENABLED.');
+      } else {
+        WakelockPlus.disable();
+        stderr.writeln('[ACPI] No active downloads. Wakelock DISABLED.');
       }
-
-      // Sweep the dead letter journal for missed links
-      _sweepDeadLetterJournal();
     });
 
     _listener = AppLifecycleListener(
-      onDetach: () => ref.read(udsServiceProvider).stop(),
+      onDetach: () => ref.read(vaultQueueServiceProvider).stop(),
       onExitRequested: () async {
-        ref.read(udsServiceProvider).stop();
+        ref.read(vaultQueueServiceProvider).stop();
         return AppExitResponse.exit;
       },
       onStateChange: (state) {
-        if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
-           // Optional: could stop here too, but UDS is usually fine to stay open
+        if (state == AppLifecycleState.resumed) {
+          stderr.writeln('[Heartbeat] App resumed. Forcing engine connectivity check...');
+          // Re-trigger engine start/connect if it was lost during sleep
+          ref.read(engineProcessProvider.notifier).start();
         }
       },
     );
   }
 
-  /// Wait for the engine to be connected, then submit the URL (with Layer 3/4)
-  void _submitUrlWhenReady(String url, {String? requestId, String? gid}) {
-    if (gid == null) {
-      stderr.writeln('[Switchboard] Error: CLI URL provided without GID. Dropping.');
-      return;
+  // (Removed _submitUrlWhenReady and _sweepDeadLetterJournal for VaultQueueService)
+
+  Future<void> _executeBootGate() async {
+    stderr.writeln('[LIFECYCLE] Boot Gate sequence started.');
+    
+    // Step 1: Wait for Engine
+    stderr.writeln('[LIFECYCLE] Step 1: Initiating Engine...');
+    final engineNotifier = ref.read(engineProcessProvider.notifier);
+    await engineNotifier.start(); 
+
+    // Step 2: Rehydrate State
+    stderr.writeln('[LIFECYCLE] Step 2: Rehydrating state from engine...');
+    try {
+      final engineClient = PirEngineClient();
+      final active = await engineClient.tellActive();
+      final waiting = await engineClient.tellWaiting(0, 100);
+      final stopped = await engineClient.tellStopped(0, 100);
+      final initialTasks = [...active, ...waiting, ...stopped];
+      ref.read(downloadListProvider.notifier).hydrate(initialTasks);
+      stderr.writeln('[LIFECYCLE] State rehydration complete. ${initialTasks.length} tasks restored.');
+    } catch (e) {
+      stderr.writeln('[LIFECYCLE] State rehydration failed: $e');
     }
 
-    ref.listenManual<EngineProcessState>(engineProcessProvider, (prev, next) {
-      if (next.status == EngineStatus.connected) {
-        final notifier = ref.read(downloadListProvider.notifier);
-        
-        // Layer 3: Synchronous Bouncer
-        if (notifier.tryClaim(requestId: requestId ?? gid, url: url, gid: gid)) {
-          stderr.writeln('[Switchboard] Claimed CLI URL: $url (gid: $gid)');
-          
-          // Layer 4: Engine Arbiter
-          PirEngineClient().addUri(url, gid: gid).then((_) {
-            stderr.writeln('[Switchboard] CLI URL accepted by engine.');
-          }).catchError((e) {
-            final errorMsg = e.toString();
-            if (errorMsg.contains('is already in use')) {
-              stderr.writeln('[DEDUP_ENGINE] Suppressed parallel CLI spawn: $gid');
-            } else {
-              stderr.writeln('[Switchboard] CLI Engine Error: $e');
-            }
-          });
-        }
-      }
-    });
+    // Step 3: Start Vault File Queue Consumer
+    stderr.writeln('[LIFECYCLE] Step 3: Starting Vault Queue consumer...');
+    try {
+      final vaultService = ref.read(vaultQueueServiceProvider);
+      vaultService.start();
+      stderr.writeln('[LIFECYCLE] Vault Queue Service started.');
+    } catch (e) {
+      stderr.writeln('[LIFECYCLE] Vault Service start error: $e');
+    }
+
+    // Release the barrier
+    _systemReady.complete();
+    stderr.writeln('[LIFECYCLE] Boot Gate CLEAR. App is fully interactive.');
   }
 
-  /// Sweep ~/.local/state/jbrowser/pending_links.jsonl for missed downloads
-  void _sweepDeadLetterJournal() {
-    try {
-      final home = Platform.environment['HOME'] ?? '/tmp';
-      final journalPath = '$home/.local/state/jbrowser/pending_links.jsonl';
-      final journalFile = File(journalPath);
-      if (!journalFile.existsSync()) return;
-
-      final lines = journalFile.readAsLinesSync().where((l) => l.trim().isNotEmpty);
-      if (lines.isEmpty) return;
-
-      stderr.writeln('[Switchboard] Dead letter journal found: ${lines.length} entries to sweep.');
-      for (final line in lines) {
-        try {
-          final entry = jsonDecode(line) as Map<String, dynamic>;
-          final url = entry['url'] as String?;
-          final deliveredAt = entry['delivered_at'];
-          
-          // IDEMPOTENCY: Ignore receipts (already delivered)
-          if (deliveredAt != null) {
-            stderr.writeln('[Switchboard] Skipping already-delivered journal entry: $url');
-            continue;
-          }
-
-          if (url != null) {
-            final requestId = entry['requestId'] as String?;
-            final gid = entry['gid'] as String? ?? 'journal-${DateTime.now().millisecondsSinceEpoch}';
-            
-            final notifier = ref.read(downloadListProvider.notifier);
-            if (notifier.tryClaim(requestId: requestId ?? gid, url: url, gid: gid)) {
-              stderr.writeln('[Switchboard] Claimed journal entry: $requestId');
-              
-              PirEngineClient().addUri(url, gid: gid).catchError((e) {
-                final errorMsg = e.toString();
-                if (errorMsg.contains('is already in use')) {
-                  stderr.writeln('[DEDUP_ENGINE] Suppressed parallel journal rehydration: $gid');
-                } else {
-                  stderr.writeln('[Switchboard] Journal rehydration error for $url: $e');
-                }
-                return 'error';
-              });
-            }
-          }
-        } catch (e) {
-          stderr.writeln('[Switchboard] Skipping malformed journal entry: $e');
-        }
-      }
-
-      // Clear the journal after sweep
-      journalFile.writeAsStringSync('');
-      stderr.writeln('[Switchboard] Dead letter journal swept and cleared.');
-    } catch (e) {
-      stderr.writeln('[Switchboard] Journal sweep error: $e');
+  @override
+  void onWindowClose() async {
+    bool isPreventClose = await windowManager.isPreventClose();
+    if (isPreventClose) {
+      await windowManager.hide();
     }
   }
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _listener.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _systemReady.future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const MaterialApp(
+            home: Scaffold(
+              backgroundColor: Color(0xFF141414),
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: Colors.blueGrey),
+                    SizedBox(height: 24),
+                    Text('System Initializing...', 
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+        return widget.child;
+      },
+    );
+  }
+}
+
+/// Singleton Guard: Ensures only one instance of Switchboard runs.
+/// If an instance is already running, it sends a WAKE signal via UDS and exits.
+Future<void> _checkInstanceSingleton(List<String> args) async {
+  final home = Platform.environment['HOME'] ?? '/tmp';
+  final lockDir = Directory('$home/.config/jbrowser_profile');
+  if (!lockDir.existsSync()) lockDir.createSync(recursive: true);
+  
+  final lockFile = File('${lockDir.path}/switchboard.lock');
+  
+  if (lockFile.existsSync()) {
+    final oldPid = int.tryParse(lockFile.readAsStringSync().trim());
+    if (oldPid != null) {
+      // Check if process is actually running
+      bool isRunning = false;
+      try {
+        // Send signal 0 to check existence without killing
+        isRunning = Process.runSync('kill', ['-0', oldPid.toString()]).exitCode == 0;
+      } catch (_) {}
+
+      if (isRunning) {
+        stderr.writeln('[Singleton] Primary instance (PID: $oldPid) is already running.');
+        
+        // Signal the primary instance to focus AND awake (CLI args deprecated)
+        try {
+          stderr.writeln('[Singleton] WOKE primary instance.');
+        } catch (e) {
+          stderr.writeln('[Singleton] Failed to send WAKE signal: $e');
+        }
+        
+        exit(0); // Terminate secondary instance
+      }
+    }
+  }
+
+  // Register current instance
+  lockFile.writeAsStringSync(pid.toString());
+  stderr.writeln('[Singleton] Lockfile created for PID: $pid');
+  
+  // Cleanup on exit (not perfect in case of crash, but handled by PID check on next boot)
+  ProcessSignal.sigterm.watch().listen((_) {
+    if (lockFile.existsSync()) lockFile.deleteSync();
+    exit(0);
+  });
 }
 
 class PirSwitchboardApp extends StatelessWidget {

@@ -2,15 +2,6 @@
 # Pir Browser — Ghost Launcher (v11.0.0 — Synchronized)
 # [PERSISTENT PROFILE - Dual-Key Pinning Active]
 
-# 1. Start or Verify the Engine (aria2c RPC)
-if ! pgrep -x "aria2c" > /dev/null; then
-    echo "[Launcher] Starting aria2c engine..."
-    chmod +x "/home/jack/Documents/JBrowser/bin/aria2c"
-    "/home/jack/Documents/JBrowser/bin/aria2c" --enable-rpc --rpc-listen-all --rpc-allow-origin-all --daemon
-else
-    echo "[Launcher] aria2c engine is already running."
-fi
-
 # 2. Workspace & Persistent Profile Initialization
 BASE_DIR="/home/jack/Documents/JBrowser"
 THORIUM="${BASE_DIR}/bin/Thorium_Browser_138.0.7204.303_AVX2.AppImage"
